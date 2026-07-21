@@ -60,21 +60,27 @@ For a real run, open **API Keys**, paste a key for one provider, hit **Test**
 
 <br>
 
-## Three ways to prompt
+## Three ways to prompt — works for any product, any brand
 
-- **Auto Prompts** — enter product name, size, category. The engine builds four
-  unique, product-specific prompts from a matched profile. Click **Preview** to
+- **Auto Prompts** — enter product name, size, category. Click **Preview** to
   see and edit all four before generating.
 - **Custom Prompts** — write all four yourself; brand quality tokens and a
   "keep the top clear for the logo" rule are appended automatically.
 - **Batch CSV** — upload `product_name,size,category`; every row runs its own
   uniqueness-checked prompt set with a live progress bar.
 
-Auto and Batch use the 11 built-in profiles (ghee, coconut, mustard, groundnut,
-sesame, sunflower, castor, walnut, almond). Any brand can use **Custom Prompts**
-for full control. To add a profile, append to `PROFILES` in
-`backend/gbn_prompts.py` and run `python backend/gbn_prompts.py` to confirm the
-uniqueness audit still passes.
+Auto and Batch never hard-fail on an unrecognised product. There are 11
+hand-tuned profiles (ghee, coconut, mustard, groundnut, sesame, sunflower,
+castor, walnut, almond) that get fully bespoke prompts. **Anything else** —
+electronics, apparel, beauty, packaged food, or literally anything —
+automatically falls through to a universal fallback engine
+(`generate_any_product_prompts` in `backend/gbn_prompts.py`) that classifies
+the product into one of six template families from its category/name and
+generates a coherent, on-brand, deterministic 4-slot prompt set on the fly. A
+small badge ("smart generic template") shows when this path was used, purely
+informational — nothing ever blocks or errors out. To add a fully bespoke
+profile instead, append to `PROFILES` in `backend/gbn_prompts.py` and run
+`python backend/gbn_prompts.py` to confirm the uniqueness audit still passes.
 
 <br>
 

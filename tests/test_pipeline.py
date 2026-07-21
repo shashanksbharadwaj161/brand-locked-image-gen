@@ -134,17 +134,64 @@ def test_retry_and_errors():
     imgs = [e for e in evs if e["type"] == "image"]
     check(len(imgs) == 1 and imgs[0]["slot"] == "03_Lifestyle", "retry regenerates one slot")
 
+    # A product with no curated profile now succeeds via the universal
+    # fallback engine instead of erroring out — "any product" is the point.
     evs2 = list(run_jobs(provider="huggingface", api_key="", dry_run=True,
                          logo_base64=LOGO, brand_name="X",
                          jobs=[("Unknown Product ZZZ", "1 L", "Other")]))
-    errs = [e for e in evs2 if e["type"] == "error"]
-    check(len(errs) == 4 and "Available profiles" in errs[0]["message"],
-          "unmatched profile -> 4 errors listing profiles")
+    imgs2 = [e for e in evs2 if e["type"] == "image"]
+    check(len(imgs2) == 4, "unmatched product still produces 4 images via generic engine")
+    pe = [e for e in evs2 if e["type"] == "prompts"][0]
+    check(pe["source"] == "generic", "prompts event reports source=generic")
+
+    # Blank product name is the one input that still fails cleanly.
+    evs2b = list(run_jobs(provider="huggingface", api_key="", dry_run=True,
+                          logo_base64=LOGO, brand_name="X",
+                          jobs=[("   ", "1 L", "Other")]))
+    errs = [e for e in evs2b if e["type"] == "error"]
+    check(len(errs) == 4, "blank product name -> 4 slot errors, batch continues")
 
     evs3 = list(run_jobs(provider="huggingface", api_key="", dry_run=True,
                          logo_base64="", brand_name="X",
                          jobs=[("A2 Gir Cow Ghee Bilona", "500ml", "Ghee")]))
     check(any(e["type"] == "fatal" for e in evs3), "missing logo -> fatal")
+
+
+def test_universal_fallback_any_product_any_brand():
+    print("== universal fallback: any product, any brand, every family ==")
+    cases = [
+        ("Bluetooth Wireless Speaker", "1 unit", "Electronics", "SonicWave"),
+        ("Organic Cotton Hoodie", "Large", "Apparel", "Northfield"),
+        ("Vitamin C Face Serum", "30ml", "Skincare", "Lumina"),
+        ("Himalayan Pink Salt", "500g", "Grocery", "PureEarth"),
+        ("Quantum Flux Capacitor XJ-9", "1 unit", "", "Acme"),
+    ]
+    for name, size, category, brand in cases:
+        evs = list(run_jobs(provider="huggingface", api_key="", dry_run=True,
+                            logo_base64=LOGO, brand_name=brand,
+                            jobs=[(name, size, category)]))
+        imgs = [e for e in evs if e["type"] == "image"]
+        check(len(imgs) == 4, f"{name} ({category or 'no category'}) -> 4 images")
+        hero = decode(next(e for e in imgs if e["slot"] == "01_Hero")["data"])
+        proc = decode(next(e for e in imgs if e["slot"] == "02_Process")["data"])
+        check(gold_in_top_band(hero) < 400, f"{name}: hero has no logo")
+        check(gold_in_top_band(proc) > 400, f"{name}: process has composited logo")
+        pe = [e for e in evs if e["type"] == "prompts"][0]
+        check(pe["source"] == "generic", f"{name}: source reported as generic")
+        check(brand in pe["prompts"]["01_Hero"]["prompt"],
+              f"{name}: brand name '{brand}' present in hero prompt")
+
+    # Determinism across two independent runs of the same product/brand.
+    def hero_prompt_for(name, brand):
+        evs = list(run_jobs(provider="huggingface", api_key="", dry_run=True,
+                            logo_base64=LOGO, brand_name=brand,
+                            jobs=[(name, "1 unit", "Electronics")]))
+        pe = [e for e in evs if e["type"] == "prompts"][0]
+        return pe["prompts"]["01_Hero"]["prompt"]
+
+    a = hero_prompt_for("Noise Cancelling Headphones", "AudioMax")
+    b = hero_prompt_for("Noise Cancelling Headphones", "AudioMax")
+    check(a == b, "same product+brand -> identical generic prompt (deterministic)")
 
 
 if __name__ == "__main__":
@@ -153,5 +200,6 @@ if __name__ == "__main__":
     test_batch()
     test_custom_and_raw()
     test_retry_and_errors()
+    test_universal_fallback_any_product_any_brand()
     print("\n" + ("ALL PASSED" if not FAILURES else f"{len(FAILURES)} FAILURE(S)"))
     sys.exit(1 if FAILURES else 0)

@@ -166,6 +166,7 @@ select.input { appearance: none; background-image: url("data:image/svg+xml;utf8,
 .provider-row .pname { font-weight: 600; font-size: 13px; }
 .provider-row .pquality { font-size: 10.5px; color: var(--text-mute); }
 .provider-row .free-tag { font-size: 9.5px; color: var(--success); border: 1px solid rgba(16,185,129,.4); padding: 1px 6px; border-radius: 999px; margin-left: auto; }
+.info-tag { font-size: 9.5px; color: var(--text-dim); border: 1px solid var(--border-strong); padding: 2px 8px; border-radius: 999px; font-weight: 500; vertical-align: middle; }
 .key-line { display: flex; gap: 7px; align-items: center; }
 .key-line .input { flex: 1; padding: 7px 9px; font-size: 12px; }
 .status-dot { width: 9px; height: 9px; border-radius: 50%; background: #444; flex: 0 0 auto; }

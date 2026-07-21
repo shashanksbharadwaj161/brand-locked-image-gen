@@ -31,11 +31,7 @@ from generators import (
     make_generator,
     provider_catalog,
 )
-from orchestrator import (
-    available_profiles,
-    preview_prompts,
-    run_jobs,
-)
+from orchestrator import preview_prompts, run_jobs
 
 FRONTEND_DIR = (Path(__file__).resolve().parent.parent / "frontend")
 
@@ -139,13 +135,14 @@ def audit():
 
 @app.post("/api/preview-prompts")
 def preview(req: PreviewRequest):
+    """Works for ANY product name: a curated profile if one matches, else the
+    universal generic engine. Only fails on a blank product name."""
     try:
-        prompts = preview_prompts(req.product_name, req.size, req.category,
-                                  req.brand_name)
+        prompts, source = preview_prompts(req.product_name, req.size,
+                                          req.category, req.brand_name)
     except ValueError as e:
-        return {"ok": False, "error": str(e),
-                "available_profiles": available_profiles()}
-    return {"ok": True, "prompts": prompts}
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "prompts": prompts, "source": source}
 
 
 @app.post("/api/test-connection")

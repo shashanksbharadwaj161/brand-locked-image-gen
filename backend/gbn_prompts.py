@@ -10,7 +10,9 @@ uniqueness audit (see audit_uniqueness) enforces this across a batch.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
+import hashlib
+import random
 import re
 
 # ---------------------------------------------------------------------------
@@ -554,6 +556,614 @@ def audit_uniqueness() -> List[str]:
             if len(sa & sb) / max(1, len(sa | sb)) > 0.55:
                 problems.append(f"flatlay_props: {a.key} and {b.key} too similar")
     return problems
+
+
+# ---------------------------------------------------------------------------
+# Universal fallback engine — works for ANY product, for ANY brand
+# ---------------------------------------------------------------------------
+# generate_product_prompts() above is intentionally strict: it only knows the
+# 11 hand-tuned GBN profiles and refuses to guess for anything else, so those
+# SKUs always get their fully bespoke prompt. Everything below is additive —
+# it never touches PROFILES or generate_product_prompts — and gives EVERY
+# other product a coherent, on-brand, non-generic-looking prompt set instead
+# of a hard failure. generate_any_product_prompts() is the entry point the
+# webapp uses: curated profile if one matches, otherwise this engine.
+GENERIC_QUALITY = ("hyperrealistic, photorealistic, 8K, premium commercial "
+                   "brand photography, editorial luxury catalog polish, "
+                   "immaculate art direction, sharp detail, no AI artifacts")
+
+
+def generic_brand_token(brand_name: str = DEFAULT_BRAND_NAME) -> str:
+    """A palette-neutral brand style token for products with no curated
+    profile. Unlike brand_token(), this makes no assumption about the
+    brand's origin or category — safe for any product, any brand."""
+    return (f"{brand_name}, a premium brand; sophisticated dark charcoal and "
+            "warm gold accent palette, clean cream highlights, elegant "
+            "modern serif typography")
+
+
+_FAMILY_KEYWORDS: Dict[str, List[str]] = {
+    "liquid_food": ["oil", "ghee", "honey", "syrup", "sauce", "vinegar",
+                    "juice", "beverage", "drink", "milk", "butter"],
+    "packaged_food": ["tea", "coffee", "spice", "masala", "snack", "food",
+                      "biscuit", "cookie", "chocolate", "nut", "cereal",
+                      "flour", "rice", "sugar", "salt", "supplement",
+                      "protein", "grocery", "powder"],
+    "beauty_personal_care": ["beauty", "skincare", "skin care", "cosmetic",
+                             "haircare", "hair care", "perfume", "fragrance",
+                             "soap", "lotion", "cream", "serum", "shampoo"],
+    "apparel_fashion": ["apparel", "fashion", "clothing", "wear", "footwear",
+                        "shoe", "garment", "accessory", "accessories", "bag",
+                        "jewelry", "jewellery"],
+    "electronics_hardware": ["electronics", "gadget", "hardware", "tech",
+                             "device", "appliance", "speaker", "headphone",
+                             "earbud", "charger", "cable", "watch", "camera"],
+}
+
+
+def classify_family(category: str, product_name: str) -> str:
+    """Pick the closest generic template family. Category is checked first
+    (it is a short, controlled field), then the product name, then falls
+    back to a fully generic family that fits absolutely anything."""
+    cat = _norm(category or "")
+    for fam, kws in _FAMILY_KEYWORDS.items():
+        if any(kw in cat for kw in kws):
+            return fam
+    name = _norm(product_name or "")
+    for fam, kws in _FAMILY_KEYWORDS.items():
+        if any(kw in name for kw in kws):
+            return fam
+    return "generic"
+
+
+FAMILIES: Dict[str, Dict] = {
+    "liquid_food": {
+        "vessel_options": [
+            "premium dark glass bottle with a matte label and a gold cap",
+            "premium ceramic jar with a wooden lid and a gold-foiled label",
+            "premium glass bottle with a brushed gold cap and a minimalist label",
+        ],
+        "hero_props": [
+            "a small ceramic dish, a linen napkin, and a sprig of fresh herbs",
+            "a rustic wooden tray, scattered whole spices, and a brass spoon",
+            "a folded natural linen cloth, a small glass dish, and soft greenery",
+        ],
+        "process_headings": ["Crafted in Small Batches", "From Source to Bottle",
+                             "The Traditional Way"],
+        "process_bullets": [
+            "Sourced from trusted growers", "Small-batch crafted for quality",
+            "Naturally processed, never rushed", "Tested for purity at every step",
+            "No artificial additives or fillers", "Bottled fresh to lock in flavour",
+            "Traditional methods, modern care", "Quality checked before it ships",
+        ],
+        "process_scenes": [
+            "a warm artisanal workshop with natural ingredients laid out on a "
+            "wooden counter, soft morning light through a window",
+            "a small-batch production room with glass vessels and natural "
+            "ingredients arranged on a stone counter, warm ambient light",
+            "a rustic countryside kitchen with fresh ingredients on a wooden "
+            "table, gentle afternoon light",
+        ],
+        "process_taglines": ["Crafted With Patience, Bottled With Pride",
+                             "Small Batches, Uncompromising Quality",
+                             "From Nature's Source, Straight To You"],
+        "lifestyle_scenes": [
+            "hands pouring the product into a bowl on a sunlit kitchen "
+            "counter, fresh ingredients nearby",
+            "hands preparing a meal with the product on a rustic wooden "
+            "table, warm natural light",
+            "hands drizzling the product over a plated dish on an elegant "
+            "table setting, soft daylight",
+        ],
+        "lifestyle_headings": ["Made for Everyday Use", "A Staple for Every Kitchen",
+                               "Naturally Better, Every Day"],
+        "benefits": [
+            "Naturally sourced ingredients", "No artificial preservatives",
+            "Rich, authentic flavour", "Crafted for everyday wellness",
+            "Trusted small-batch quality", "Free from harmful additives",
+            "Consistent purity, every batch", "Sustainably and responsibly made",
+        ],
+        "lifestyle_taglines": ["Pure Ingredients, Honest Craft",
+                               "Quality You Can Taste",
+                               "Naturally Better, Batch After Batch"],
+        "flatlay_props": [
+            "scattered whole spices, a linen cloth, a wooden spoon, and "
+            "fresh greenery",
+            "a small ceramic bowl, dried herbs, a brass ladle, and folded "
+            "natural linen",
+            "fresh ingredients, a rustic wooden board, and a sprig of "
+            "greenery",
+        ],
+        "flatlay_headlines": ["Pure & Simple", "Naturally Crafted",
+                              "Small-Batch Quality"],
+        "badges": ["Small Batch", "Naturally Sourced", "No Additives",
+                   "Quality Tested", "Handcrafted", "Trusted Purity"],
+    },
+
+    "packaged_food": {
+        "vessel_options": [
+            "premium stand-up pouch with a matte finish and a gold foil label",
+            "premium branded box with a textured lid and gold lettering",
+            "premium metal tin with a brushed lid and an embossed label",
+        ],
+        "hero_props": [
+            "a small wooden bowl, scattered loose contents, and a linen napkin",
+            "a rustic tray, a brass scoop, and a sprig of dried herbs",
+            "a folded burlap cloth, a ceramic dish, and soft natural light",
+        ],
+        "process_headings": ["Roasted and Packed With Care", "From Farm to Pantry",
+                             "Freshness You Can Taste"],
+        "process_bullets": [
+            "Sourced from trusted farms", "Small-batch roasted and packed",
+            "Sealed fresh for maximum flavour", "No artificial preservatives added",
+            "Quality checked at every stage", "Traditional recipes, modern care",
+            "Packed within hours of preparation", "Rigorously tested for purity",
+        ],
+        "process_scenes": [
+            "a warm pantry workshop with ingredients laid out on a wooden "
+            "counter, soft natural light",
+            "a small-batch packing room with fresh ingredients on a stone "
+            "counter, warm ambient light",
+            "a rustic kitchen counter with the raw ingredients on display, "
+            "gentle afternoon light",
+        ],
+        "process_taglines": ["Packed Fresh, Delivered With Pride",
+                             "Small Batches, Big Flavour",
+                             "From Our Pantry to Yours"],
+        "lifestyle_scenes": [
+            "hands scooping the product into a bowl on a bright kitchen "
+            "counter",
+            "hands preparing a snack with the product on a rustic wooden "
+            "table, warm light",
+            "hands pouring the product into a jar on a sunlit breakfast "
+            "table",
+        ],
+        "lifestyle_headings": ["A Pantry Favourite", "Made for Everyday Snacking",
+                               "Freshness in Every Bite"],
+        "benefits": [
+            "Naturally sourced ingredients", "No artificial preservatives",
+            "Rich, authentic taste", "Perfect for daily use",
+            "Trusted small-batch quality", "Free from harmful additives",
+            "Sealed fresh for freshness", "Sustainably and responsibly made",
+        ],
+        "lifestyle_taglines": ["Honest Ingredients, Honest Taste",
+                               "Quality You Can Taste",
+                               "Freshness, Batch After Batch"],
+        "flatlay_props": [
+            "scattered loose product, a linen cloth, a wooden scoop, and "
+            "dried herbs",
+            "a small ceramic bowl, natural ingredients, a brass spoon, and "
+            "folded burlap",
+            "fresh ingredients, a rustic wooden board, and scattered "
+            "natural elements",
+        ],
+        "flatlay_headlines": ["Fresh & Wholesome", "Naturally Crafted",
+                              "Small-Batch Quality"],
+        "badges": ["Small Batch", "Naturally Sourced", "No Preservatives",
+                   "Freshly Packed", "Handcrafted", "Quality Tested"],
+    },
+
+    "beauty_personal_care": {
+        "vessel_options": [
+            "premium frosted glass jar with a matte gold lid",
+            "sleek airless pump bottle with a brushed metal cap",
+            "minimalist glass dropper bottle with a gold pipette cap",
+        ],
+        "hero_props": [
+            "scattered rose petals, a smooth stone, and a sprig of eucalyptus",
+            "a folded cream linen towel, a small glass dish, and dried "
+            "botanicals",
+            "a natural wood tray, a soft bristle brush, and delicate flower "
+            "petals",
+        ],
+        "process_headings": ["Formulated With Care", "Pure Ingredients, "
+                             "Proven Results", "Crafted for Your Skin"],
+        "process_bullets": [
+            "Formulated with clean, natural ingredients",
+            "Dermatologically mindful formulation",
+            "Free from harsh sulphates and parabens",
+            "Small-batch blended for consistency",
+            "Cruelty-free and never tested on animals",
+            "Rigorously tested for purity",
+            "Sustainably sourced botanical extracts",
+            "Balanced pH for everyday use",
+        ],
+        "process_scenes": [
+            "a serene formulation studio with botanical ingredients on a "
+            "marble counter, soft natural light",
+            "a minimalist spa workspace with glass vessels and dried "
+            "botanicals, warm ambient light",
+            "a calm ingredient-blending scene with natural extracts on a "
+            "stone counter, gentle daylight",
+        ],
+        "process_taglines": ["Formulated With Intention, Made to Nourish",
+                             "Clean Ingredients, Visible Results",
+                             "Pure by Design"],
+        "lifestyle_scenes": [
+            "hands gently applying the product in a calm, softly lit "
+            "bathroom setting, no faces visible",
+            "hands massaging the product into skin on a soft cotton towel, "
+            "warm natural light, no faces visible",
+            "hands holding the product beside a folded towel and candle, "
+            "serene self-care setting, no faces visible",
+        ],
+        "lifestyle_headings": ["A Ritual Worth Repeating", "Self-Care, Simplified",
+                               "Nourish Every Day"],
+        "benefits": [
+            "Deeply nourishes and hydrates", "Free from harsh chemicals",
+            "Gentle for daily use", "Cruelty-free formulation",
+            "Dermatologically mindful", "Naturally derived ingredients",
+            "Balances and restores", "Lightweight, fast-absorbing",
+        ],
+        "lifestyle_taglines": ["Nourish Naturally, Every Day",
+                               "Clean Beauty, Honest Results",
+                               "Your Skin, Elevated"],
+        "flatlay_props": [
+            "scattered rose petals, a smooth stone, dried botanicals, and a "
+            "linen towel",
+            "a small glass dish, soft bristle brush, botanical extracts, and "
+            "folded cream cloth",
+            "delicate flower petals, a wooden tray, and natural skincare "
+            "elements",
+        ],
+        "flatlay_headlines": ["Pure & Radiant", "Naturally Formulated",
+                              "Clean Beauty"],
+        "badges": ["Cruelty-Free", "Clean Formula", "Dermatologist Mindful",
+                   "Naturally Derived", "Small Batch", "Sulphate-Free"],
+    },
+
+    "apparel_fashion": {
+        "vessel_options": None,
+        "hero_props": [
+            "a neatly folded natural linen backdrop and a single dried branch",
+            "a minimalist wooden hanger and soft draped fabric in the "
+            "background",
+            "a folded canvas cloth and a subtle leather accessory beside it",
+        ],
+        "process_headings": ["Crafted With Precision", "Made to Last",
+                             "The Art of Fine Tailoring"],
+        "process_bullets": [
+            "Cut from premium, carefully selected fabric",
+            "Stitched by skilled artisans",
+            "Finished with reinforced, durable seams",
+            "Quality checked at every stage",
+            "Sustainably and ethically sourced materials",
+            "Designed for lasting comfort",
+            "Small-batch crafted for consistency",
+            "Tested for fit and durability",
+        ],
+        "process_scenes": [
+            "a warm tailoring workshop with fabric rolls and a sewing "
+            "station, soft natural light",
+            "a minimalist atelier with cutting tools and folded fabric on a "
+            "wooden table, warm light",
+            "a craft studio with thread spools and a garment in progress, "
+            "gentle afternoon light",
+        ],
+        "process_taglines": ["Crafted With Precision, Made to Last",
+                             "Small-Batch Tailoring, Uncompromising Quality",
+                             "Where Craft Meets Comfort"],
+        "lifestyle_scenes": [
+            "hands adjusting the garment on a wooden hanger in a bright "
+            "minimalist room, no faces visible",
+            "hands folding the product neatly on a linen-covered table, "
+            "warm natural light, no faces visible",
+            "hands presenting the product against a soft neutral backdrop, "
+            "elegant styling, no faces visible",
+        ],
+        "lifestyle_headings": ["Designed for Everyday Confidence",
+                               "Comfort Meets Style",
+                               "Made to Be Worn, Made to Last"],
+        "benefits": [
+            "Premium, carefully selected fabric", "Reinforced for lasting "
+            "durability", "Designed for everyday comfort",
+            "Ethically and sustainably made", "Versatile for any occasion",
+            "Consistent, reliable fit", "Finished with meticulous detail",
+            "Small-batch crafted quality",
+        ],
+        "lifestyle_taglines": ["Made to Move With You", "Style That Lasts",
+                               "Crafted for Everyday Confidence"],
+        "flatlay_props": [
+            "folded fabric swatches, a spool of thread, and a minimalist "
+            "accessory",
+            "a wooden hanger, soft draped fabric, and a leather accessory",
+            "neatly folded garments, a measuring tape, and natural styling "
+            "elements",
+        ],
+        "flatlay_headlines": ["Crafted to Last", "Designed With Care",
+                              "Timeless Quality"],
+        "badges": ["Premium Fabric", "Ethically Made", "Small Batch",
+                   "Reinforced Stitching", "Sustainably Sourced",
+                   "Quality Tested"],
+    },
+
+    "electronics_hardware": {
+        "vessel_options": None,
+        "hero_props": [
+            "a minimalist matte pedestal and subtle ambient reflections",
+            "a sleek dark surface with soft directional highlights",
+            "a floating display stand with a soft gradient backdrop",
+        ],
+        "process_headings": ["Engineered for Performance", "Precision in "
+                             "Every Detail", "Built to Perform"],
+        "process_bullets": [
+            "Engineered with precision components",
+            "Rigorously tested for reliability",
+            "Designed for everyday performance",
+            "Built with premium, durable materials",
+            "Quality checked before it ships",
+            "Optimised for consistent performance",
+            "Thoughtfully engineered for real use",
+            "Tested across real-world conditions",
+        ],
+        "process_scenes": [
+            "a minimalist engineering workspace with precision tools on a "
+            "matte desk, cool ambient light",
+            "a modern product lab with components laid out on a clean "
+            "surface, soft studio light",
+            "a sleek design studio with the device in various assembly "
+            "stages, gentle directional light",
+        ],
+        "process_taglines": ["Engineered With Precision, Built to Last",
+                             "Performance You Can Rely On",
+                             "Designed for the Way You Live"],
+        "lifestyle_scenes": [
+            "hands operating the device on a clean modern desk, soft "
+            "daylight, no faces visible",
+            "hands using the product in a bright minimalist workspace, no "
+            "faces visible",
+            "hands setting up the device on a sleek table, warm ambient "
+            "light, no faces visible",
+        ],
+        "lifestyle_headings": ["Performance for Everyday Life", "Designed "
+                               "Around You", "Effortless, Every Time"],
+        "benefits": [
+            "Reliable, everyday performance", "Precision-engineered "
+            "components", "Durable, long-lasting build",
+            "Optimised for real-world use", "Seamless, intuitive experience",
+            "Consistent performance you can trust", "Thoughtfully designed "
+            "details", "Rigorously tested quality",
+        ],
+        "lifestyle_taglines": ["Performance, Redefined",
+                               "Built for the Way You Live",
+                               "Precision Meets Simplicity"],
+        "flatlay_props": [
+            "neatly arranged cables, a minimalist stand, and soft ambient "
+            "lighting accents",
+            "a sleek accessory pouch, a cleaning cloth, and subtle styling "
+            "elements",
+            "a minimalist charging dock and softly arranged accessories",
+        ],
+        "flatlay_headlines": ["Precision Engineered", "Built to Perform",
+                              "Designed With Purpose"],
+        "badges": ["Precision Built", "Rigorously Tested", "Durable Design",
+                   "Performance Tested", "Premium Materials",
+                   "Reliable Build"],
+    },
+
+    "generic": {
+        "vessel_options": None,
+        "hero_props": [
+            "a minimalist pedestal, soft directional light, and understated "
+            "styling elements",
+            "a softly draped neutral backdrop with subtle natural textures",
+            "a clean matte surface with a single elegant styling accent",
+        ],
+        "process_headings": ["Crafted With Care", "Made to Impress",
+                             "Quality in Every Detail"],
+        "process_bullets": [
+            "Thoughtfully designed and crafted",
+            "Made with premium, quality materials",
+            "Rigorously tested before it ships",
+            "Small-batch crafted for consistency",
+            "Built to a higher standard",
+            "Quality checked at every stage",
+            "Designed with the end user in mind",
+            "Sustainably and responsibly made",
+        ],
+        "process_scenes": [
+            "a warm, minimalist workshop with the product's raw materials "
+            "on a wooden counter, soft natural light",
+            "a clean design studio with the product shown in progress, "
+            "gentle ambient light",
+            "a craft space with quality materials arranged on a stone "
+            "counter, warm daylight",
+        ],
+        "process_taglines": ["Crafted With Purpose, Made to Impress",
+                             "Small-Batch Quality, Uncompromising Standards",
+                             "Where Craft Meets Care"],
+        "lifestyle_scenes": [
+            "hands presenting the product on a clean, softly lit surface, "
+            "no faces visible",
+            "hands using the product in a bright minimalist setting, no "
+            "faces visible",
+            "hands holding the product against a soft neutral backdrop, "
+            "elegant styling, no faces visible",
+        ],
+        "lifestyle_headings": ["Designed for Everyday Life", "Made for You",
+                               "Quality You Can Feel"],
+        "benefits": [
+            "Premium, carefully selected materials", "Built to a higher "
+            "standard", "Designed for everyday use",
+            "Consistent, reliable quality", "Thoughtfully crafted details",
+            "Trusted small-batch quality", "Sustainably and responsibly "
+            "made", "Rigorously tested before shipping",
+        ],
+        "lifestyle_taglines": ["Made With Purpose, Built to Last",
+                               "Quality You Can Feel",
+                               "Crafted for Everyday Confidence"],
+        "flatlay_props": [
+            "a few understated styling accents, soft natural textures, and "
+            "clean negative space",
+            "minimalist props, a neutral backdrop, and soft directional "
+            "shadows",
+            "quality materials arranged with intentional spacing and clean "
+            "styling",
+        ],
+        "flatlay_headlines": ["Crafted With Care", "Quality by Design",
+                              "Made to Impress"],
+        "badges": ["Premium Quality", "Small Batch", "Quality Tested",
+                   "Handcrafted", "Trusted Brand", "Built to Last"],
+    },
+}
+
+
+def _rng_for(*parts: str) -> random.Random:
+    """A Random instance seeded deterministically from the given strings, so
+    the same product always maps to the same generic prompt (stable across
+    preview -> generate), while different products vary."""
+    key = "|".join(parts)
+    seed = hashlib.md5(key.encode("utf-8")).hexdigest()
+    return random.Random(seed)
+
+
+def _pick(pool: List[str], rng: random.Random) -> str:
+    return rng.choice(pool)
+
+
+def _pick_n(pool: List[str], n: int, rng: random.Random) -> List[str]:
+    return rng.sample(pool, min(n, len(pool)))
+
+
+def generate_generic_prompts(product_name: str, size: str, category: str,
+                             brand_name: str = DEFAULT_BRAND_NAME
+                             ) -> Dict[str, Dict]:
+    """Universal fallback — produces a complete, coherent, on-brand 4-slot
+    prompt set for ANY product name and ANY brand, with no curated Profile
+    required. Category-aware (liquid/food, packaged food, beauty, apparel,
+    electronics, or a fully generic fallback that fits literally anything),
+    and deterministic per product so repeated previews stay stable.
+
+    Raises ValueError only if product_name is blank.
+    """
+    product_name = (product_name or "").strip()
+    if not product_name:
+        raise ValueError("Product name is required.")
+
+    brand_name = (brand_name or DEFAULT_BRAND_NAME).strip() or DEFAULT_BRAND_NAME
+    size = (size or "").strip()
+    size_suffix = f", {size}" if size else ""
+    family = classify_family(category, product_name)
+    pools = FAMILIES[family]
+    rng = _rng_for(product_name, size, category)
+
+    brand = generic_brand_token(brand_name)
+    hero_props = _pick(pools["hero_props"], rng)
+    process_heading = _pick(pools["process_headings"], rng)
+    process_bullets = "; ".join(_pick_n(pools["process_bullets"], 4, rng))
+    process_scene = _pick(pools["process_scenes"], rng)
+    process_tagline = _pick(pools["process_taglines"], rng)
+    lifestyle_scene = _pick(pools["lifestyle_scenes"], rng)
+    lifestyle_heading = _pick(pools["lifestyle_headings"], rng)
+    benefits = "; ".join(_pick_n(pools["benefits"], 4, rng))
+    lifestyle_tagline = _pick(pools["lifestyle_taglines"], rng)
+    flatlay_props = _pick(pools["flatlay_props"], rng)
+    flatlay_headline = _pick(pools["flatlay_headlines"], rng)
+    badges = ", ".join(_pick_n(pools["badges"], 3, rng))
+
+    vessel_options = pools.get("vessel_options")
+    if vessel_options:
+        vessel = _pick(vessel_options, rng)
+        hero = (
+            f"Hyperrealistic premium ecommerce product photography of a "
+            f"single {vessel}, containing {product_name}. The gold label "
+            f"clearly reads '{brand_name}' at the top, '{product_name}' in "
+            f"the middle, and '{size}' in large bold gold lettering at the "
+            f"bottom as the most prominent text. The product stands "
+            f"centered on a dark polished walnut wooden surface, styled "
+            f"with {hero_props}. Warm golden studio rim lighting from the "
+            f"top left, deep charcoal bokeh background, ultra sharp focus "
+            f"on the label, Phase One medium format camera quality. "
+            f"{GENERIC_QUALITY}. No people, no text overlays."
+        )
+        process_subject = (f"A {vessel}, holding {product_name}{size_suffix}, "
+                           f"sits at the bottom center.")
+        flatlay_subject = (f"A {vessel}, holding {product_name}{size_suffix}, "
+                           f"lies centered under a dramatic warm golden "
+                           f"spotlight from directly above.")
+    else:
+        hero = (
+            f"Hyperrealistic premium ecommerce product photography of a "
+            f"single {product_name}{size_suffix}, presented as the sole "
+            f"hero object on a dark polished walnut wooden surface, styled "
+            f"with {hero_props}. A small elegant tag beside the product "
+            f"reads '{brand_name}' in refined gold lettering. Warm golden "
+            f"studio rim lighting from the top left, deep charcoal bokeh "
+            f"background, ultra sharp focus on the product, Phase One "
+            f"medium format camera quality. {GENERIC_QUALITY}. No people, "
+            f"no text overlays."
+        )
+        process_subject = (f"The {product_name}{size_suffix} sits at the "
+                           f"bottom center.")
+        flatlay_subject = (f"The {product_name}{size_suffix} lies centered "
+                           f"under a dramatic warm golden spotlight from "
+                           f"directly above.")
+
+    process = (
+        f"Square 1:1 premium brand poster. {brand}. Solid deep charcoal "
+        f"#1C1C1C background. The top 15 percent is left clean and empty "
+        f"for a logo. Left column: a large white Playfair Display serif "
+        f"heading '{process_heading}', a thin gold divider rule beneath it, "
+        f"then four white bullet points with small gold markers reading: "
+        f"{process_bullets}. Right column: a photorealistic scene of "
+        f"{process_scene}. {process_subject} A full width dark charcoal "
+        f"banner runs along the bottom with gold serif text "
+        f"'{process_tagline}'. Crisp clean typography, perfectly spelled. "
+        f"{GENERIC_QUALITY}."
+    )
+
+    lifestyle = (
+        f"Square 1:1 premium brand poster. {brand}. Warm cream #FBF7EF "
+        f"background. The top 15 percent is left clean and empty for a "
+        f"logo. The main scene shows {lifestyle_scene}. Absolutely no faces "
+        f"are visible, only hands and clothing. To one side a large dark "
+        f"charcoal Playfair Display serif heading reads "
+        f"'{lifestyle_heading}', with four benefit rows beneath it in dark "
+        f"charcoal text with gold icons reading: {benefits}. A full width "
+        f"dark charcoal banner runs along the bottom with centered gold "
+        f"serif text '{lifestyle_tagline}'. Elegant editorial layout, "
+        f"generous white space, perfectly spelled typography. "
+        f"{GENERIC_QUALITY}."
+    )
+
+    flatlay = (
+        f"Square 1:1 premium brand poster, overhead flat lay photography on "
+        f"a dark charcoal #1C1C1C textured surface. {brand}. The top 15 "
+        f"percent is left clean and empty for a logo. {flatlay_subject} "
+        f"Arranged around it with intentional spacing and clear negative "
+        f"space: {flatlay_props}. Near the bottom a short gold Playfair "
+        f"Display headline reads '{flatlay_headline}', with cream subtext "
+        f"below reading '{product_name}{size_suffix}', and three small gold "
+        f"badge icons in a row reading {badges}. Museum-quality styling, "
+        f"never cluttered. {GENERIC_QUALITY}."
+    )
+
+    return {
+        "01_Hero":      {"prompt": hero,      "negative": NEG_HERO,   "variant": "hero"},
+        "02_Process":   {"prompt": process,   "negative": NEG_POSTER, "variant": "process"},
+        "03_Lifestyle": {"prompt": lifestyle, "negative": NEG_POSTER, "variant": "lifestyle"},
+        "04_FlatLay":   {"prompt": flatlay,   "negative": NEG_FLAT,   "variant": "flatlay"},
+    }
+
+
+def generate_any_product_prompts(product_name: str, size: str, category: str,
+                                 brand_name: str = DEFAULT_BRAND_NAME
+                                 ) -> Tuple[Dict[str, Dict], str]:
+    """The entry point the webapp uses. Curated profile if the product name
+    matches one of the 11 hand-tuned GBN profiles; otherwise the universal
+    generic engine. Returns (prompts, source) where source is "curated" or
+    "generic", so the caller can surface which path was used.
+
+    generate_product_prompts()'s strict ValueError-on-no-match behaviour
+    (relied on by the original CLI) is left completely untouched — this is
+    an additive wrapper on top of it, not a change to it.
+    """
+    try:
+        return generate_product_prompts(product_name, size, category,
+                                        brand_name), "curated"
+    except ValueError:
+        return generate_generic_prompts(product_name, size, category,
+                                        brand_name), "generic"
 
 
 if __name__ == "__main__":

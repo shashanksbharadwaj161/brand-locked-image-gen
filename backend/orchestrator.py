@@ -71,15 +71,18 @@ _NEG_BY_VARIANT = {
 # ---------------------------------------------------------------------------
 # Prompt resolution
 # ---------------------------------------------------------------------------
-def available_profiles() -> List[Dict]:
-    """Profiles the auto engine can match, for friendly UI error messages."""
-    return [{"key": p.key, "aliases": p.aliases} for p in gp.PROFILES]
-
-
 def preview_prompts(product_name: str, size: str, category: str,
-                    brand_name: str = gp.DEFAULT_BRAND_NAME) -> Dict[str, Dict]:
-    """The 4 auto prompts for one SKU. Raises ValueError if unmatched."""
-    return gp.generate_product_prompts(product_name, size, category, brand_name)
+                    brand_name: str = gp.DEFAULT_BRAND_NAME
+                    ) -> Tuple[Dict[str, Dict], str]:
+    """The 4 auto prompts for one SKU, for ANY product name.
+
+    Returns (prompts, source) where source is "curated" (one of the 11
+    hand-tuned GBN profiles matched) or "generic" (the universal fallback
+    engine built a coherent prompt set on the fly). Raises ValueError only
+    if product_name is blank.
+    """
+    return gp.generate_any_product_prompts(product_name, size, category,
+                                           brand_name)
 
 
 def _decorate_custom(text: str, variant: str) -> str:
@@ -94,14 +97,17 @@ def _decorate_custom(text: str, variant: str) -> str:
 def _resolve_slots(product: str, size: str, category: str, brand_name: str,
                    custom_prompts: Optional[Dict],
                    custom_negatives: Optional[Dict],
-                   raw_prompts: Optional[Dict] = None) -> List[Dict]:
-    """Return an ordered list of {slot,label,variant,prompt,negative}.
+                   raw_prompts: Optional[Dict] = None
+                   ) -> Tuple[List[Dict], str]:
+    """Return (slots, source) — an ordered list of
+    {slot,label,variant,prompt,negative}, plus where the prompts came from
+    ("raw", "custom", "curated", or "generic").
 
     Priority: ``raw_prompts`` (used verbatim — the user edited the previewed
-    auto prompts) > ``custom_prompts`` (Mode B, brand rules appended) > auto.
-
-    Auto mode raises ValueError (no profile) so the caller can report it as a
-    per-product error and keep the batch going.
+    auto prompts) > ``custom_prompts`` (Mode B, brand rules appended) > auto
+    (curated profile if one matches, otherwise the universal generic engine
+    — this always succeeds for any product name; it only raises ValueError
+    if the product name itself is blank).
     """
     if raw_prompts:
         slots = []
@@ -118,7 +124,7 @@ def _resolve_slots(product: str, size: str, category: str, brand_name: str,
                 "slot": slot, "label": label, "variant": variant,
                 "prompt": raw, "negative": neg or _NEG_BY_VARIANT[variant],
             })
-        return slots
+        return slots, "raw"
 
     if custom_prompts:
         slots = []
@@ -137,9 +143,10 @@ def _resolve_slots(product: str, size: str, category: str, brand_name: str,
                 "slot": slot, "label": label, "variant": variant,
                 "prompt": _decorate_custom(raw, variant), "negative": neg,
             })
-        return slots
+        return slots, "custom"
 
-    auto = gp.generate_product_prompts(product, size, category, brand_name)
+    auto, source = gp.generate_any_product_prompts(product, size, category,
+                                                    brand_name)
     slots = []
     for slot, label, variant, _field in SLOTS:
         spec = auto[slot]
@@ -147,7 +154,7 @@ def _resolve_slots(product: str, size: str, category: str, brand_name: str,
             "slot": slot, "label": label, "variant": variant,
             "prompt": spec["prompt"], "negative": spec["negative"],
         })
-    return slots
+    return slots, source
 
 
 # ---------------------------------------------------------------------------
@@ -286,23 +293,24 @@ def run_jobs(*, provider: str, api_key: str, dry_run: bool,
             yield {"type": "product_start", "index": index, "total": total,
                    "product": product, "size": size, "category": category}
 
-            # Resolve prompts for this product.
+            # Resolve prompts for this product. The universal fallback engine
+            # means this succeeds for any product name in any category — the
+            # ValueError path below is now only reachable for a blank name.
             try:
-                slots = _resolve_slots(product, size, category, brand_name,
-                                       custom_prompts if total == 1 else None,
-                                       custom_negatives if total == 1 else None,
-                                       raw_prompts if total == 1 else None)
+                slots, source = _resolve_slots(
+                    product, size, category, brand_name,
+                    custom_prompts if total == 1 else None,
+                    custom_negatives if total == 1 else None,
+                    raw_prompts if total == 1 else None)
             except FatalGenerationError as e:
                 # e.g. an empty custom slot — this is a request error, stop.
                 yield {"type": "fatal", "message": str(e)}
                 return
             except ValueError as e:
-                # No matching profile: report and skip this product.
-                keys = ", ".join(p["key"] for p in available_profiles())
+                # Blank product name: report and skip this product.
                 for slot, label, _v, _f in effective_slots:
                     yield {"type": "error", "index": index, "slot": slot,
-                           "label": label,
-                           "message": f"{e} Available profiles: {keys}."}
+                           "label": label, "message": str(e)}
                 yield {"type": "product_complete", "index": index,
                        "product": product, "ok": 0,
                        "total": len(effective_slots)}
@@ -311,7 +319,7 @@ def run_jobs(*, provider: str, api_key: str, dry_run: bool,
             if wanted is not None:
                 slots = [s for s in slots if s["slot"] in wanted]
 
-            yield {"type": "prompts", "index": index,
+            yield {"type": "prompts", "index": index, "source": source,
                    "prompts": {s["slot"]: {"prompt": s["prompt"],
                                            "negative": s["negative"],
                                            "variant": s["variant"]}

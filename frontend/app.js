@@ -23,6 +23,7 @@ const state = {
   brandName: "Gau Bhoomi Naturals",
   mode: "auto",
   autoPrompts: null,      // { slot: {prompt, negative, variant} } after preview
+  autoPromptsSource: null, // "curated" | "generic" — where the preview came from
   batchRows: [],
   dryRun: false,
   generating: false,
@@ -290,7 +291,7 @@ function wireModeTabs() {
 // ---- Auto mode ------------------------------------------------------------
 function wireAutoMode() {
   ["a-product", "a-size", "a-category"].forEach((id) => {
-    $(`#${id}`).addEventListener("input", () => { state.autoPrompts = null; $("#a-prompt-cards").innerHTML = ""; refreshGenerateButton(); });
+    $(`#${id}`).addEventListener("input", () => { state.autoPrompts = null; state.autoPromptsSource = null; $("#a-prompt-cards").innerHTML = ""; refreshGenerateButton(); });
   });
   $("#a-preview").addEventListener("click", previewAutoPrompts);
 }
@@ -312,9 +313,11 @@ async function previewAutoPrompts() {
     if (!data.ok) {
       renderProfileError(data);
       state.autoPrompts = null;
+      state.autoPromptsSource = null;
     } else {
       state.autoPrompts = data.prompts;
-      renderPromptCards(data.prompts);
+      state.autoPromptsSource = data.source;
+      renderPromptCards(data.prompts, data.source);
     }
   } catch (e) {
     toast("Could not reach the server for prompt preview.", "bad");
@@ -325,18 +328,24 @@ async function previewAutoPrompts() {
 }
 
 function renderProfileError(data) {
+  // The only remaining failure case is a blank product name — the universal
+  // fallback engine means every non-blank product name now succeeds here.
   const wrap = $("#a-prompt-cards");
   wrap.innerHTML = "";
-  const names = (data.available_profiles || []).map((p) => p.key).join(", ");
   wrap.appendChild(el("div", { class: "audit-issues", style: "list-style:none;padding-left:0;margin:0;" }, [
-    el("div", { text: data.error || "No matching profile." }),
-    el("div", { style: "margin-top:6px;color:var(--text-mute)", text: `Try Custom Prompts, or use one of: ${names}` }),
+    el("div", { text: data.error || "Could not generate prompts." }),
   ]));
 }
 
-function renderPromptCards(prompts) {
+function renderPromptCards(prompts, source) {
   const wrap = $("#a-prompt-cards");
   wrap.innerHTML = "";
+  if (source === "generic") {
+    wrap.appendChild(el("div", {
+      class: "key-help", style: "margin-bottom:10px;color:var(--text-dim);",
+      text: "ℹ No hand-tuned profile for this product — using the smart generic template engine instead. Still on-brand and unique; edit any prompt below, or switch to Custom Prompts for full control.",
+    }));
+  }
   SLOTS.forEach((s) => {
     const spec = prompts[s.slot];
     if (!spec) return;
@@ -650,6 +659,10 @@ function storePrompts(ev) {
   Object.entries(ev.prompts).forEach(([slot, spec]) => {
     if (res.cells[slot]) { res.cells[slot].prompt = spec.prompt; res.cells[slot].negative = spec.negative; }
   });
+  if (ev.source === "generic") {
+    const badge = $(`#pb-source-${ev.index}`);
+    if (badge) { badge.textContent = "smart generic template"; badge.style.display = "inline"; }
+  }
 }
 
 function onProgress(ev, isRetry) {
@@ -733,11 +746,25 @@ function ensureProductBlock(ev) {
 
   const empty = $("#results-area .empty-state"); if (empty) empty.remove();
 
+  // Auto mode always runs a single product (index 0). If the user previewed
+  // first, the generate request sends those prompts verbatim (source="raw"
+  // server-side) so edits are honored — but we still know from the preview
+  // step itself whether they originated from the generic engine, so show
+  // that provenance immediately instead of waiting on the SSE source (which
+  // will say "raw" in that case, not "generic").
+  const knownGeneric = state.mode === "auto" && ev.index === 0 &&
+    state.autoPromptsSource === "generic";
+
   const block = el("div", { class: "product-block", id: `product-${ev.index}` }, [
     el("div", { class: "pb-head" }, [
       el("div", {}, [
         el("span", { class: "pb-name", text: ev.product }),
         el("span", { class: "pb-meta", text: [ev.size, ev.category].filter(Boolean).join(" · ") }),
+        el("span", {
+          class: "info-tag", id: `pb-source-${ev.index}`,
+          text: knownGeneric ? "smart generic template" : "",
+          style: knownGeneric ? "margin-left:8px;" : "display:none;margin-left:8px;",
+        }),
       ]),
       el("button", { class: "btn btn-sm", id: `dl-prod-${ev.index}`, text: "⬇ Download 4 (ZIP)", disabled: "disabled", onclick: () => downloadProductZip(ev.index) }),
     ]),
