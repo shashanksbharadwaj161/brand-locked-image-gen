@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Secrets / env
+.env
+.env.local
+*.local
+
+# Pipeline / app output
+gbn_output/
+output/
+*.zip
+
+# Node (only used for the optional browser test)
+node_modules/
+package-lock.json
+
+# Scratch / local-only
+scratchpad_local/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

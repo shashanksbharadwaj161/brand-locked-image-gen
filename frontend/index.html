@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Brand-Locked Image Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23C9A84C'/><text x='50' y='68' font-size='60' text-anchor='middle' fill='%23171717' font-family='sans-serif' font-weight='bold'>B</text></svg>" />
+</head>
+<body>
+  <!-- Header -->
+  <header class="topbar">
+    <div class="brand-title">
+      <div class="brand-mark">B</div>
+      <div>
+        <h1>Brand-Locked Image Generator</h1>
+        <div class="sub">Lock a logo · batch-generate on-brand product imagery</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="provider-pill">Provider: <strong id="active-provider-label">HuggingFace</strong></div>
+      <label class="switch" title="Test the full pipeline without spending API credits">
+        <input type="checkbox" id="dry-run-toggle" />
+        <span class="track"></span>
+        <span>Dry Run</span>
+      </label>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <!-- ===================== LEFT PANEL (controls) ===================== -->
+    <aside class="left-panel">
+
+      <!-- API keys -->
+      <section class="card collapsed" id="card-keys">
+        <div class="card-head" data-toggle>
+          <h2>1 · API Keys</h2><span class="chev">▾</span>
+        </div>
+        <div class="card-body">
+          <p class="section-note">Keys stay in your browser only (sessionStorage) and are sent per request &mdash; never saved on the server. Pick the active provider with its radio.</p>
+          <div id="provider-list"></div>
+        </div>
+      </section>
+
+      <!-- Logo -->
+      <section class="card" id="card-logo">
+        <div class="card-head" data-toggle>
+          <h2>2 · Brand Logo</h2><span class="chev">▾</span>
+        </div>
+        <div class="card-body">
+          <p class="section-note">Upload a transparent <strong>PNG</strong> once, lock it, then generate for any product. The logo is composited programmatically &mdash; never described to the model &mdash; so it is pixel-identical on every poster.</p>
+          <label class="field">
+            <span>Brand name (rendered on the hero label)</span>
+            <input class="input" id="brand-name" placeholder="Gau Bhoomi Naturals" value="Gau Bhoomi Naturals" />
+          </label>
+          <input type="file" id="logo-file" accept="image/png,image/*" hidden />
+          <div class="dropzone" id="logo-dropzone">
+            <div>Drag &amp; drop a logo PNG here<br />or <strong>click to browse</strong></div>
+          </div>
+          <div class="logo-preview" id="logo-preview" style="display:none;">
+            <img class="thumb" id="logo-thumb" alt="logo preview" />
+            <div class="meta">
+              <div class="locked">🔒 Logo locked</div>
+              <div id="logo-name" class="pquality" style="margin:4px 0;"></div>
+              <button class="btn btn-sm btn-ghost" id="logo-clear">Clear / switch brand</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Prompt input -->
+      <section class="card" id="card-prompt">
+        <div class="card-head" data-toggle>
+          <h2>3 · What to generate</h2><span class="chev">▾</span>
+        </div>
+        <div class="card-body">
+          <div class="tabs" id="mode-tabs">
+            <button class="tab active" data-mode="auto">Auto Prompts</button>
+            <button class="tab" data-mode="custom">Custom Prompts</button>
+            <button class="tab" data-mode="batch">Batch CSV</button>
+          </div>
+
+          <!-- Mode A: Auto -->
+          <div class="tab-pane active" data-pane="auto">
+            <label class="field"><span>Product name</span>
+              <input class="input" id="a-product" placeholder="A2 Gir Cow Ghee Bilona" /></label>
+            <div class="row">
+              <label class="field"><span>Size</span>
+                <input class="input" id="a-size" placeholder="500ml" /></label>
+              <label class="field"><span>Category</span>
+                <select class="input" id="a-category">
+                  <option>Ghee</option><option>Oil</option><option>Honey</option>
+                  <option>Masala</option><option>Other</option>
+                </select></label>
+            </div>
+            <button class="btn btn-sm" id="a-preview" style="width:100%;margin-bottom:12px;">Preview the 4 prompts →</button>
+            <div id="a-prompt-cards"></div>
+          </div>
+
+          <!-- Mode B: Custom -->
+          <div class="tab-pane" data-pane="custom">
+            <p class="section-note">Full control over all four images. Brand quality tokens and a "keep the top clear for the logo" rule are appended automatically.</p>
+            <label class="field"><span>Hero Shot (no logo &mdash; label carries the brand)</span>
+              <textarea class="input" id="c-hero" placeholder="A single premium bottle of…"></textarea></label>
+            <label class="field"><span>Process Poster</span>
+              <textarea class="input" id="c-process" placeholder="A rustic mill scene showing…"></textarea></label>
+            <label class="field"><span>Lifestyle Poster</span>
+              <textarea class="input" id="c-lifestyle" placeholder="Hands cooking with…"></textarea></label>
+            <label class="field"><span>Flat Lay Poster</span>
+              <textarea class="input" id="c-flatlay" placeholder="Overhead arrangement of…"></textarea></label>
+            <div class="neg-toggle">
+              <label class="switch" style="margin-bottom:8px;">
+                <input type="checkbox" id="c-neg-toggle" /><span class="track"></span>
+                <span>Edit negative prompts</span>
+              </label>
+            </div>
+            <div id="c-neg-wrap" style="display:none;">
+              <label class="field"><span>Negative prompt (applied to all four)</span>
+                <textarea class="input" id="c-negative"></textarea></label>
+            </div>
+          </div>
+
+          <!-- Mode C: Batch -->
+          <div class="tab-pane" data-pane="batch">
+            <p class="section-note">Upload a CSV with columns <code>product_name, size, category</code>. Every product runs its own uniqueness-checked prompt set.</p>
+            <input type="file" id="csv-file" accept=".csv,text/csv" hidden />
+            <div class="dropzone" id="csv-dropzone">
+              <div>Drag &amp; drop <strong>products.csv</strong><br />or <strong>click to browse</strong></div>
+            </div>
+            <div class="batch-table-wrap" id="batch-table-wrap" style="display:none;">
+              <table class="batch" id="batch-table"></table>
+            </div>
+            <div id="batch-count" class="batch-count"></div>
+          </div>
+        </div>
+      </section>
+
+      <button class="btn btn-primary" id="generate-btn" disabled>Generate</button>
+      <div id="gen-hint" class="key-help" style="text-align:center;margin-top:8px;"></div>
+    </aside>
+
+    <!-- ===================== RIGHT PANEL (results) ===================== -->
+    <main class="right-panel">
+      <div id="audit-area"></div>
+      <div id="progress-area"></div>
+      <div id="results-actions" class="result-actions" style="display:none;">
+        <button class="btn btn-sm" id="dl-batch">⬇ Download Batch ZIP</button>
+        <button class="btn btn-sm btn-ghost" id="clear-results">Clear results</button>
+      </div>
+      <div id="results-area">
+        <div class="empty-state" id="empty-state">
+          <div class="big">🖼️</div>
+          <h3>No images yet</h3>
+          <p>Add an API key (or flip on <strong>Dry Run</strong>), lock a brand logo, describe a product, and hit <strong>Generate</strong>. Images stream in here as each one finishes &mdash; a 2×2 grid per product with per-image and batch ZIP downloads.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal" id="modal">
+    <button class="modal-close" id="modal-close">×</button>
+    <img id="modal-img" alt="preview" />
+    <div class="modal-cap" id="modal-cap"></div>
+  </div>
+
+  <div class="toast-wrap" id="toast-wrap"></div>
+
+  <script src="zip.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
